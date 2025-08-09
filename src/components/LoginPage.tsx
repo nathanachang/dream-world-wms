@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Auth } from 'aws-amplify';
-import { PackageIcon } from './icons'; // Assuming icons.tsx is in the same directory
+import { signIn } from 'aws-amplify/auth';
+import { PackageIcon } from './icons';
 
 interface LoginPageProps {
   onLogin: () => void;
@@ -17,7 +17,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
         setLoading(true);
         setError('');
         try {
-            await Auth.signIn(username, password);
+            await signIn({ username, password });
             onLogin();
         } catch (err: any) {
             setError(err.message);

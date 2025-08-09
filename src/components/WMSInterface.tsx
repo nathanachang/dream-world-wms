@@ -1,4 +1,11 @@
 import React, { useState, useMemo } from 'react';
+import { Item, Order, OrderStatus } from '../types';
+import { 
+    PackageIcon, ShoppingCartIcon, BarChart3Icon, SearchIcon, 
+    AlertCircleIcon, XIcon, CheckCircleIcon, ClockIcon, TruckIcon,
+    MapPinIcon, DollarSignIcon, Edit3Icon, CheckIcon, EyeIcon, 
+    TrendingUpIcon, PrinterIcon, DownloadIcon, LogOutIcon 
+} from './icons';
 
 // --- START: DUMMY DATA ---
 const dummyInventory: Item[] = [
@@ -31,8 +38,8 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
 
     const allOrderStatuses: OrderStatus[] = ['Pending', 'Processing', 'Shipped', 'Delivered', 'Cancelled'];
 
-    const uniqueSizes = useMemo(() => [...new Set(inventory.map(item => item.size))], [inventory]);
-    const uniqueBins = useMemo(() => [...new Set(inventory.map(item => item.bin))], [inventory]);
+    const uniqueSizes = useMemo(() => Array.from(new Set(inventory.map(item => item.size))), [inventory]);
+    const uniqueBins = useMemo(() => Array.from(new Set(inventory.map(item => item.bin))), [inventory]);
 
     const filteredInventory = useMemo(() => {
         return inventory.filter(item => {
@@ -115,6 +122,7 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
 
     const getTotalOrderValue = () => orders.reduce((sum, order) => sum + order.subtotal, 0);
     const getTotalInventoryItems = () => inventory.reduce((sum, item) => sum + item.qty, 0);
+    const getUniqueSKUs = () => Array.from(new Set(inventory.map(i => i.sku))).length;
 
     const getAnalyticsData = () => {
         const days = parseInt(dateRange);
@@ -155,7 +163,7 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
             <html>
             <head>
                 <title>Order Slip - ${order.order_id}</title>
-                <script src="https://cdn.tailwindcss.com"><\/script>
+                <script src="https://cdn.tailwindcss.com"></script>
                 <style>
                     body { font-family: Arial, sans-serif; }
                     @media print {
@@ -309,7 +317,7 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
                             <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><PackageIcon className="h-8 w-8 text-blue-600" /><div><p className="text-sm font-medium text-gray-500">Total Units</p><p className="text-2xl font-semibold text-gray-900">{getTotalInventoryItems()}</p></div></div>
                             <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><AlertCircleIcon className="h-8 w-8 text-orange-600" /><div><p className="text-sm font-medium text-gray-500">Low Stock Items</p><p className="text-2xl font-semibold text-gray-900">{inventory.filter(i => i.qty > 0 && i.qty <= 10).length}</p></div></div>
                             <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><XIcon className="h-8 w-8 text-red-600" /><div><p className="text-sm font-medium text-gray-500">Out of Stock</p><p className="text-2xl font-semibold text-gray-900">{inventory.filter(i => i.qty === 0).length}</p></div></div>
-                            <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><CheckCircleIcon className="h-8 w-8 text-green-600" /><div><p className="text-sm font-medium text-gray-500">Unique SKUs</p><p className="text-2xl font-semibold text-gray-900">{[...new Set(inventory.map(i => i.sku))].length}</p></div></div>
+                            <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><CheckCircleIcon className="h-8 w-8 text-green-600" /><div><p className="text-sm font-medium text-gray-500">Unique SKUs</p><p className="text-2xl font-semibold text-gray-900">{getUniqueSKUs()}</p></div></div>
                         </div>
                         <div className="bg-white shadow rounded-lg overflow-hidden">
                             <div className="overflow-x-auto">

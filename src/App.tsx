@@ -1,15 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { Amplify, Auth } from 'aws-amplify';
+import { Amplify } from 'aws-amplify';
+import { getCurrentUser, signOut } from 'aws-amplify/auth';
 import WMSInterface from './components/WMSInterface';
 import LoginPage from './components/LoginPage';
 
 // --- START: AWS Amplify Configuration ---
 Amplify.configure({
-  Auth: {
-    region: 'us-east-1',
-    userPoolId: 'us-east-1_yNYSZwwOb',
-    userPoolWebClientId: '6ocitqn0f4plno0a998fv3shs4',
-  },
+    Auth: {
+        Cognito: {
+            userPoolId: 'us-east-1_yNYSZwwOb',
+            userPoolClientId: '6ocitqn0f4plno0a998fv3shs4', 
+        }        
+    }
 });
 // --- END: AWS Amplify Configuration ---
 
@@ -20,7 +22,7 @@ const App = () => {
     useEffect(() => {
         const checkSession = async () => {
             try {
-                await Auth.currentSession();
+                await getCurrentUser()
                 setIsAuthenticated(true);
             } catch (e) {
                 // No user session found
@@ -33,7 +35,7 @@ const App = () => {
     const handleLogin = () => setIsAuthenticated(true);
     const handleLogout = async () => {
         try {
-            await Auth.signOut();
+            await signOut();
             setIsAuthenticated(false);
         } catch (error) {
             console.error('Error signing out: ', error);
