@@ -1,0 +1,443 @@
+import React, { useState, useMemo } from 'react';
+
+// --- START: DUMMY DATA ---
+const dummyInventory: Item[] = [
+  { item_name: "Classic T-Shirt", sku: "TS-BLK-M", size: "M", bin: "A1", ln: "01", qty: 50, price: 19.99, last_updated: new Date('2025-08-04T14:20:00Z') },
+  { item_name: "Classic T-Shirt", sku: "TS-BLK-L", size: "L", bin: "A1", ln: "02", qty: 30, price: 19.99, last_updated: new Date('2025-08-04T14:20:00Z') },
+  { item_name: "Denim Jeans", sku: "JN-BLU-32", size: "32", bin: "B3", ln: "05", qty: 8, price: 49.99, last_updated: new Date('2025-08-03T11:05:00Z') },
+];
+const dummyOrders: Order[] = [
+    { order_id: "ORD-2025-001", customer: "Alice Johnson", timestamp: new Date('2025-08-01T10:30:00Z'), item_list: [{ item_name: "Classic T-Shirt", sku: "TS-BLK-M", size: "M", bin: "A1", ln: "01", qty: 2, price: 19.99, last_updated: new Date() }], tracking_number: "1Z9999999999999999", address: "123 Maple St, Springfield, IL 62704", subtotal: 39.98, customer_email: "alice@example.com", customer_phone: "555-123-4567", carrier: "UPS", shipping_method: "Ground", status: "Shipped" },
+    { order_id: "ORD-2025-002", customer: "Bob Smith", timestamp: new Date('2025-08-02T14:00:00Z'), item_list: [ { item_name: "Denim Jeans", sku: "JN-BLU-32", size: "32", bin: "B3", ln: "05", qty: 1, price: 49.99, last_updated: new Date() }, { item_name: "Hoodie", sku: "HD-GRY-L", size: "L", bin: "A2", ln: "04", qty: 1, price: 39.99, last_updated: new Date() } ], tracking_number: null, address: "456 Oak Ave, Anytown, USA 12345", subtotal: 89.98, customer_email: "bob@example.com", customer_phone: "555-987-6543", carrier: null, shipping_method: "Standard", status: "Pending" },
+];
+// --- END: DUMMY DATA ---
+
+const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
+    const [activeTab, setActiveTab] = useState('inventory');
+    const [inventory, setInventory] = useState(dummyInventory);
+    const [orders, setOrders] = useState(dummyOrders);
+    const [searchTerm, setSearchTerm] = useState('');
+    const [editingItem, setEditingItem] = useState<string | null>(null);
+    const [newQty, setNewQty] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [selectedSize, setSelectedSize] = useState('all');
+    const [selectedBin, setSelectedBin] = useState('all');
+    const [dateRange, setDateRange] = useState('7');
+    const [showLabelModal, setShowLabelModal] = useState(false);
+    const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+    const [showStatusUpdateModal, setShowStatusUpdateModal] = useState(false);
+    const [orderToUpdateStatus, setOrderToUpdateStatus] = useState<Order | null>(null);
+
+    const allOrderStatuses: OrderStatus[] = ['Pending', 'Processing', 'Shipped', 'Delivered', 'Cancelled'];
+
+    const uniqueSizes = useMemo(() => [...new Set(inventory.map(item => item.size))], [inventory]);
+    const uniqueBins = useMemo(() => [...new Set(inventory.map(item => item.bin))], [inventory]);
+
+    const filteredInventory = useMemo(() => {
+        return inventory.filter(item => {
+            const matchesSearch = item.item_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                item.sku.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                item.bin.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                item.ln.toLowerCase().includes(searchTerm.toLowerCase());
+            const matchesSize = selectedSize === 'all' || item.size === selectedSize;
+            const matchesBin = selectedBin === 'all' || item.bin === selectedBin;
+            return matchesSearch && matchesSize && matchesBin;
+        });
+    }, [inventory, searchTerm, selectedSize, selectedBin]);
+
+    const handleQtyUpdate = (item: Item, newQtyValue: string) => {
+        const qtyToUpdate = parseInt(newQtyValue, 10);
+        if (isNaN(qtyToUpdate) || qtyToUpdate < 0) {
+            setError('Quantity must be a non-negative number.');
+            return;
+        }
+        setLoading(true);
+        setError(null);
+        setTimeout(() => {
+            setInventory(prev => prev.map(invItem =>
+                invItem.sku === item.sku ? { ...invItem, qty: qtyToUpdate, last_updated: new Date() } : invItem
+            ));
+            setEditingItem(null);
+            setNewQty('');
+            setLoading(false);
+        }, 500);
+    };
+
+    const handleOrderStatusChange = (orderId: string, newStatus: OrderStatus) => {
+        setLoading(true);
+        setError(null);
+        setTimeout(() => {
+            setOrders(prev => prev.map(order =>
+                order.order_id === orderId ? { ...order, status: newStatus } : order
+            ));
+            if (selectedOrder && selectedOrder.order_id === orderId) {
+                setSelectedOrder(prev => prev ? { ...prev, status: newStatus } : null);
+            }
+            closeStatusUpdateModal();
+            setLoading(false);
+        }, 500);
+    };
+    
+    const openStatusUpdateModal = (order: Order) => {
+        setOrderToUpdateStatus(order);
+        setShowStatusUpdateModal(true);
+    };
+
+    const closeStatusUpdateModal = () => {
+        setOrderToUpdateStatus(null);
+        setShowStatusUpdateModal(false);
+    };
+
+    const getStockStatus = (qty: number) => {
+        if (qty === 0) return { status: 'out', color: 'text-red-600', bg: 'bg-red-100' };
+        if (qty <= 10) return { status: 'low', color: 'text-orange-600', bg: 'bg-orange-100' };
+        return { status: 'good', color: 'text-green-600', bg: 'bg-green-100' };
+    };
+
+    const formatDateTime = (dateTime: Date) => {
+        return new Date(dateTime).toLocaleDateString('en-US', {
+            year: 'numeric', month: 'short', day: 'numeric',
+            hour: '2-digit', minute: '2-digit'
+        });
+    };
+
+    const getOrderStatus = (order: Order) => {
+        switch (order.status.toLowerCase()) {
+            case 'shipped': return { status: order.status, color: 'text-green-600', bg: 'bg-green-100', icon: TruckIcon };
+            case 'delivered': return { status: order.status, color: 'text-green-600', bg: 'bg-green-100', icon: CheckCircleIcon };
+            case 'pending': return { status: order.status, color: 'text-yellow-600', bg: 'bg-yellow-100', icon: ClockIcon };
+            case 'cancelled': return { status: order.status, color: 'text-red-600', bg: 'bg-red-100', icon: XIcon };
+            case 'processing': return { status: order.status, color: 'text-blue-600', bg: 'bg-blue-100', icon: PackageIcon };
+            default: return { status: order.status, color: 'text-gray-600', bg: 'bg-gray-100', icon: ClockIcon };
+        }
+    };
+
+    const getTotalOrderValue = () => orders.reduce((sum, order) => sum + order.subtotal, 0);
+    const getTotalInventoryItems = () => inventory.reduce((sum, item) => sum + item.qty, 0);
+
+    const getAnalyticsData = () => {
+        const days = parseInt(dateRange);
+        const cutoffDate = new Date();
+        cutoffDate.setDate(cutoffDate.getDate() - days);
+        const recentOrders = orders.filter(order => new Date(order.timestamp) >= cutoffDate);
+        const totalRevenue = recentOrders.reduce((sum, order) => sum + order.subtotal, 0);
+        const avgOrderValue = recentOrders.length > 0 ? totalRevenue / recentOrders.length : 0;
+        const ordersPerDay = recentOrders.length > 0 ? recentOrders.length / days : 0;
+        const shippedOrders = recentOrders.filter(o => o.status === 'Shipped' || o.status === 'Delivered').length;
+        const fulfillmentRate = recentOrders.length > 0 ? (shippedOrders / recentOrders.length) * 100 : 0;
+        const productSales: { [key: string]: number } = {};
+        recentOrders.forEach(order => {
+            order.item_list.forEach(item => {
+                const key = `${item.item_name} (${item.size})`;
+                productSales[key] = (productSales[key] || 0) + item.qty;
+            });
+        });
+        const topProducts = Object.entries(productSales).sort(([, a], [, b]) => b - a).slice(0, 5).map(([name, qty]) => ({ name, qty }));
+        const totalInventoryValue = inventory.reduce((sum, item) => sum + (item.qty * (item.price || 0)), 0);
+        const lowStockItems = inventory.filter(item => item.qty > 0 && item.qty <= 10).length;
+        const outOfStockItems = inventory.filter(item => item.qty === 0).length;
+        const dailyRevenue = Array.from({ length: days }, (_, i) => {
+            const date = new Date();
+            date.setDate(date.getDate() - (days - 1 - i));
+            const dayOrders = recentOrders.filter(o => new Date(o.timestamp).toDateString() === date.toDateString());
+            return {
+                date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+                revenue: dayOrders.reduce((sum, order) => sum + order.subtotal, 0)
+            };
+        });
+        return { totalRevenue, avgOrderValue, ordersPerDay, fulfillmentRate, topProducts, totalInventoryValue, lowStockItems, outOfStockItems, dailyRevenue };
+    };
+    
+    const printOrderSlip = (order: Order) => {
+        const slipContent = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Order Slip - ${order.order_id}</title>
+                <script src="https://cdn.tailwindcss.com"><\/script>
+                <style>
+                    body { font-family: Arial, sans-serif; }
+                    @media print {
+                        body { -webkit-print-color-adjust: exact; }
+                        .no-print { display: none; }
+                    }
+                </style>
+            </head>
+            <body class="p-4">
+                <div class="max-w-4xl mx-auto bg-white p-8 border border-gray-300">
+                    <div class="flex justify-between items-start mb-6">
+                        <div>
+                            <h1 class="text-3xl font-bold">Your Company Name</h1>
+                            <p>123 Warehouse St, Distribution City, DC 12345</p>
+                        </div>
+                        <div class="text-right">
+                            <h2 class="text-2xl font-bold text-gray-700">Picking Ticket</h2>
+                            <p class="text-gray-600"><strong>Pick Ticket #:</strong> ${order.order_id.replace('ORD-', 'PICK-')}</p>
+                            <p class="text-gray-600"><strong>Order Number:</strong> ${order.order_id}</p>
+                            <p class="text-gray-600"><strong>Date:</strong> ${new Date(order.timestamp).toLocaleDateString()}</p>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-8 mb-8">
+                        <div>
+                            <h3 class="text-lg font-semibold border-b pb-2 mb-2">Sold To:</h3>
+                            <p>${order.customer}</p>
+                            <p>${order.address}</p>
+                            <p>${order.customer_email}</p>
+                            <p>${order.customer_phone}</p>
+                        </div>
+                        <div>
+                            <h3 class="text-lg font-semibold border-b pb-2 mb-2">Ship To:</h3>
+                            <p>${order.customer}</p>
+                            <p>${order.address}</p>
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-4 gap-4 text-sm text-center bg-gray-100 p-2 rounded-t-lg font-semibold">
+                        <div><p><strong>PO:</strong> N/A</p></div>
+                        <div><p><strong>Terms:</strong> N/A</p></div>
+                        <div><p><strong>Ship Via:</strong> ${order.carrier || 'N/A'}</p></div>
+                        <div><p><strong>SubTotal:</strong> $${order.subtotal.toFixed(2)}</p></div>
+                    </div>
+
+                    <table class="w-full text-left border-collapse mt-4">
+                        <thead>
+                            <tr class="bg-gray-200">
+                                <th class="p-2 border">Bin</th>
+                                <th class="p-2 border">LN#</th>
+                                <th class="p-2 border">SKU</th>
+                                <th class="p-2 border">Description</th>
+                                <th class="p-2 border text-center">Size</th>
+                                <th class="p-2 border text-center">O-QTY</th>
+                                <th class="p-2 border text-center">S-QTY</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${order.item_list.map((item, index) => `
+                                <tr class="hover:bg-gray-50">
+                                    <td class="p-2 border">${item.bin}</td>
+                                    <td class="p-2 border">${item.ln}</td>
+                                    <td class="p-2 border">${item.sku}</td>
+                                    <td class="p-2 border">${item.item_name}</td>
+                                    <td class="p-2 border text-center">${item.size}</td>
+                                    <td class="p-2 border text-center">${item.qty}</td>
+                                    <td class="p-2 border text-center"></td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                     <div class="mt-8 text-center no-print">
+                        <button onclick="window.print()" class="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Print</button>
+                    </div>
+                </div>
+            </body>
+            </html>
+        `;
+        const printWindow = window.open('', '_blank');
+        if (printWindow) {
+            printWindow.document.write(slipContent);
+            printWindow.document.close();
+        }
+    };
+
+    const openOrderDetailsModal = (order: Order) => {
+        setSelectedOrder(order);
+        setShowLabelModal(true);
+    };
+
+    const closeOrderDetailsModal = () => {
+        setSelectedOrder(null);
+        setShowLabelModal(false);
+    };
+
+    return (
+        <div className="min-h-screen bg-gray-50">
+            <header className="bg-white shadow-sm border-b">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="flex justify-between items-center py-4">
+                        <div className="flex items-center space-x-3">
+                            <PackageIcon className="h-8 w-8 text-blue-600" />
+                            <h1 className="text-2xl font-bold text-gray-900">Warehouse Management System</h1>
+                        </div>
+                        <div className="flex items-center space-x-4">
+                            {loading && <div className="text-sm text-blue-500 flex items-center space-x-2"><ClockIcon className="h-4 w-4 animate-spin" /><span>Loading...</span></div>}
+                            {error && <div className="text-sm text-red-500 flex items-center space-x-2"><AlertCircleIcon className="h-4 w-4" /><span>{error}</span></div>}
+                            <div className="text-sm text-gray-500">Last sync: {new Date().toLocaleTimeString()}</div>
+                            <button onClick={onLogout} className="flex items-center space-x-2 text-sm text-gray-600 hover:text-blue-600">
+                                <LogOutIcon className="h-4 w-4" />
+                                <span>Logout</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <nav className="bg-white border-b">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="flex space-x-8">
+                        <button onClick={() => setActiveTab('inventory')} className={`flex items-center space-x-2 py-4 px-1 border-b-2 font-medium text-sm ${activeTab === 'inventory' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}>
+                            <PackageIcon className="h-5 w-5" /><span>Inventory Management</span>
+                        </button>
+                        <button onClick={() => setActiveTab('orders')} className={`flex items-center space-x-2 py-4 px-1 border-b-2 font-medium text-sm ${activeTab === 'orders' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}>
+                            <ShoppingCartIcon className="h-5 w-5" /><span>Order Management</span>
+                        </button>
+                        <button onClick={() => setActiveTab('analytics')} className={`flex items-center space-x-2 py-4 px-1 border-b-2 font-medium text-sm ${activeTab === 'analytics' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}>
+                            <BarChart3Icon className="h-5 w-5" /><span>Analytics & Reports</span>
+                        </button>
+                    </div>
+                </div>
+            </nav>
+
+            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                {activeTab === 'inventory' && (
+                    <div className="space-y-6">
+                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center space-y-4 sm:space-y-0">
+                            <h2 className="text-lg font-semibold text-gray-900">Inventory Catalog</h2>
+                            <div className="flex flex-col sm:flex-row items-start sm:items-center space-y-2 sm:space-y-0 sm:space-x-4">
+                                <div className="relative">
+                                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                        <SearchIcon className="h-5 w-5 text-gray-400" />
+                                    </div>
+                                    <input type="text" placeholder="Search items, SKU, bin, or line..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
+                                </div>
+                                <select value={selectedSize} onChange={(e) => setSelectedSize(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"><option value="all">All Sizes</option>{uniqueSizes.map(size => <option key={size} value={size}>{size}</option>)}</select>
+                                <select value={selectedBin} onChange={(e) => setSelectedBin(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"><option value="all">All Bins</option>{uniqueBins.map(bin => <option key={bin} value={bin}>{bin}</option>)}</select>
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                            <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><PackageIcon className="h-8 w-8 text-blue-600" /><div><p className="text-sm font-medium text-gray-500">Total Units</p><p className="text-2xl font-semibold text-gray-900">{getTotalInventoryItems()}</p></div></div>
+                            <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><AlertCircleIcon className="h-8 w-8 text-orange-600" /><div><p className="text-sm font-medium text-gray-500">Low Stock Items</p><p className="text-2xl font-semibold text-gray-900">{inventory.filter(i => i.qty > 0 && i.qty <= 10).length}</p></div></div>
+                            <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><XIcon className="h-8 w-8 text-red-600" /><div><p className="text-sm font-medium text-gray-500">Out of Stock</p><p className="text-2xl font-semibold text-gray-900">{inventory.filter(i => i.qty === 0).length}</p></div></div>
+                            <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><CheckCircleIcon className="h-8 w-8 text-green-600" /><div><p className="text-sm font-medium text-gray-500">Unique SKUs</p><p className="text-2xl font-semibold text-gray-900">{[...new Set(inventory.map(i => i.sku))].length}</p></div></div>
+                        </div>
+                        <div className="bg-white shadow rounded-lg overflow-hidden">
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-gray-200">
+                                    <thead className="bg-gray-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Item</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SKU</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Size</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Location</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Updated</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th></tr></thead>
+                                    <tbody className="bg-white divide-y divide-gray-200">
+                                        {filteredInventory.map(item => {
+                                            const stockStatus = getStockStatus(item.qty);
+                                            const itemKey = item.sku;
+                                            return (<tr key={itemKey} className="hover:bg-gray-50">
+                                                <td className="px-6 py-4 whitespace-nowrap"><div className="text-sm font-medium text-gray-900">{item.item_name}</div></td>
+                                                <td className="px-6 py-4 whitespace-nowrap"><div className="text-sm text-gray-900">{item.sku}</div></td>
+                                                <td className="px-6 py-4 whitespace-nowrap"><span className="px-2 py-1 text-xs font-medium bg-gray-100 text-gray-800 rounded-full">{item.size}</span></td>
+                                                <td className="px-6 py-4 whitespace-nowrap"><div className="flex items-center space-x-2 text-sm text-gray-900"><MapPinIcon className="h-4 w-4 text-gray-400" /><span>{item.bin}</span></div><div className="text-xs text-gray-500 ml-6">Line: {item.ln}</div></td>
+                                                <td className="px-6 py-4 whitespace-nowrap">{editingItem === itemKey ? (<div className="flex items-center space-x-2"><input type="number" value={newQty} onChange={e => setNewQty(e.target.value)} className="w-20 px-2 py-1 border border-gray-300 rounded text-sm" min="0" /><button onClick={() => handleQtyUpdate(item, newQty)} disabled={loading} className="text-green-600 hover:text-green-800"><CheckIcon className="h-4 w-4" /></button><button onClick={() => { setEditingItem(null); setNewQty(''); }} className="text-red-600 hover:text-red-800"><XIcon className="h-4 w-4" /></button></div>) : (<span className={`px-2 py-1 text-xs font-medium ${stockStatus.bg} ${stockStatus.color} rounded-full`}>{item.qty} units</span>)}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatDateTime(item.last_updated)}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium"><button onClick={() => { setEditingItem(itemKey); setNewQty(item.qty.toString()); }} className="flex items-center space-x-2 text-blue-600 hover:text-blue-800"><Edit3Icon className="h-4 w-4" /><span>Update</span></button></td>
+                                            </tr>)
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                {activeTab === 'orders' && (
+                    <div className="space-y-6">
+                        <div className="flex justify-between items-center"><h2 className="text-lg font-semibold text-gray-900">Order Management</h2></div>
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                            <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><ShoppingCartIcon className="h-8 w-8 text-blue-600" /><div><p className="text-sm font-medium text-gray-500">Total Orders</p><p className="text-2xl font-semibold text-gray-900">{orders.length}</p></div></div>
+                            <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><ClockIcon className="h-8 w-8 text-yellow-600" /><div><p className="text-sm font-medium text-gray-500">Pending Orders</p><p className="text-2xl font-semibold text-gray-900">{orders.filter(o => o.status === 'Pending').length}</p></div></div>
+                            <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><TruckIcon className="h-8 w-8 text-green-600" /><div><p className="text-sm font-medium text-gray-500">Shipped Orders</p><p className="text-2xl font-semibold text-gray-900">{orders.filter(o => o.status === 'Shipped' || o.status === 'Delivered').length}</p></div></div>
+                            <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><DollarSignIcon className="h-8 w-8 text-purple-600" /><div><p className="text-sm font-medium text-gray-500">Total Value</p><p className="text-2xl font-semibold text-gray-900">${getTotalOrderValue().toFixed(2)}</p></div></div>
+                        </div>
+                        <div className="space-y-4">
+                            {orders.map(order => {
+                                const orderStatus = getOrderStatus(order);
+                                const StatusIcon = orderStatus.icon;
+                                return (<div key={order.order_id} className="bg-white rounded-lg shadow border">
+                                    <div className="p-6">
+                                        <div className="flex items-center justify-between mb-4">
+                                            <div className="flex items-center space-x-4">
+                                                <div><h3 className="text-lg font-medium text-gray-900">{order.order_id}</h3><p className="text-sm text-gray-500">{order.customer}</p></div>
+                                                <button onClick={() => openStatusUpdateModal(order)} className={`flex items-center space-x-2 px-3 py-1 rounded-full text-sm font-medium ${orderStatus.bg} ${orderStatus.color} hover:opacity-80 transition-opacity`} disabled={loading}><StatusIcon className="h-4 w-4" /><span className="capitalize">{order.status}</span><Edit3Icon className="h-3 w-3" /></button>
+                                            </div>
+                                            <div className="text-right"><p className="text-lg font-semibold text-gray-900">${order.subtotal.toFixed(2)}</p><p className="text-sm text-gray-500">{formatDateTime(order.timestamp)}</p></div>
+                                        </div>
+                                        <div className="mt-4 flex justify-end space-x-2">
+                                            <button onClick={() => openOrderDetailsModal(order)} className="flex items-center space-x-2 px-4 py-2 border border-gray-300 text-gray-700 text-sm rounded-lg hover:bg-gray-50"><EyeIcon className="h-4 w-4" /><span>View Details</span></button>
+                                        </div>
+                                    </div>
+                                </div>)
+                            })}
+                        </div>
+                    </div>
+                )}
+                {activeTab === 'analytics' && (
+                   <div className="space-y-6">
+                        <div className="flex justify-between items-center">
+                            <h2 className="text-lg font-semibold text-gray-900">Analytics & Reports</h2>
+                            <div className="flex items-center space-x-4">
+                                <select value={dateRange} onChange={e => setDateRange(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"><option value="7">Last 7 days</option><option value="14">Last 14 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select>
+                                <button className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"><DownloadIcon className="h-4 w-4" /><span>Export Report</span></button>
+                            </div>
+                        </div>
+                        {(() => {
+                            const analytics = getAnalyticsData();
+                            return (<>
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                                    <div className="bg-white p-6 rounded-lg shadow flex items-center justify-between"><div><p className="text-sm font-medium text-gray-500">Total Revenue</p><p className="text-2xl font-semibold text-gray-900">${analytics.totalRevenue.toFixed(2)}</p></div><div className="flex items-center text-green-600"><TrendingUpIcon className="h-5 w-5" /></div></div>
+                                    <div className="bg-white p-6 rounded-lg shadow flex items-center justify-between"><div><p className="text-sm font-medium text-gray-500">Avg Order Value</p><p className="text-2xl font-semibold text-gray-900">${analytics.avgOrderValue.toFixed(2)}</p></div><DollarSignIcon className="h-8 w-8 text-green-600" /></div>
+                                    <div className="bg-white p-6 rounded-lg shadow flex items-center justify-between"><div><p className="text-sm font-medium text-gray-500">Fulfillment Rate</p><p className="text-2xl font-semibold text-gray-900">{analytics.fulfillmentRate.toFixed(1)}%</p></div><TruckIcon className="h-8 w-8 text-blue-600" /></div>
+                                    <div className="bg-white p-6 rounded-lg shadow flex items-center justify-between"><div><p className="text-sm font-medium text-gray-500">Inventory Value</p><p className="text-2xl font-semibold text-gray-900">${analytics.totalInventoryValue.toLocaleString()}</p></div><PackageIcon className="h-8 w-8 text-purple-600" /></div>
+                                </div>
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                    <div className="bg-white p-6 rounded-lg shadow">
+                                        <h3 className="text-lg font-semibold text-gray-900 mb-4">Revenue Trend</h3>
+                                        <div className="h-64 flex items-end justify-between space-x-2">{analytics.dailyRevenue.map((day, index) => { const maxRevenue = Math.max(...analytics.dailyRevenue.map(d => d.revenue)); const height = maxRevenue > 0 ? (day.revenue / maxRevenue) * 200 : 0; return (<div key={index} className="flex flex-col items-center"><div className="bg-blue-500 rounded-t min-w-[20px] hover:bg-blue-600 transition-colors" style={{ height: `${height}px` }} title={`$${day.revenue.toFixed(2)}`}></div><div className="text-xs text-gray-500 mt-2 transform -rotate-45 origin-left">{day.date}</div></div>) })}</div>
+                                    </div>
+                                    <div className="bg-white p-6 rounded-lg shadow">
+                                        <h3 className="text-lg font-semibold text-gray-900 mb-4">Top Products</h3>
+                                        <div className="space-y-4">{analytics.topProducts.map((product, index) => { const maxQty = Math.max(...analytics.topProducts.map(p => p.qty)); const percentage = maxQty > 0 ? (product.qty / maxQty) * 100 : 0; return (<div key={index} className="flex items-center space-x-3"><div className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center text-sm font-semibold text-gray-600">{index + 1}</div><div className="flex-1"><div className="flex justify-between items-center mb-1"><span className="text-sm font-medium text-gray-900">{product.name}</span><span className="text-sm text-gray-500">{product.qty} sold</span></div><div className="w-full bg-gray-200 rounded-full h-2"><div className="bg-blue-500 h-2 rounded-full transition-all duration-300" style={{ width: `${percentage}%` }}></div></div></div></div>) })}</div>
+                                    </div>
+                                </div>
+                            </>)
+                        })()}
+                    </div>
+                )}
+            </main>
+
+            {showLabelModal && selectedOrder && (
+                <div className="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center p-4 z-50">
+                    <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full p-6 relative">
+                        <button onClick={closeOrderDetailsModal} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><XIcon className="h-6 w-6" /></button>
+                        <h2 className="text-2xl font-bold text-gray-900 mb-6 border-b pb-3">Order Details: {selectedOrder.order_id}</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                            <div><p className="text-sm font-medium text-gray-500">Customer Name</p><p className="text-lg text-gray-900">{selectedOrder.customer}</p></div>
+                            <div><p className="text-sm font-medium text-gray-500">Order Date</p><p className="text-lg text-gray-900">{formatDateTime(selectedOrder.timestamp)}</p></div>
+                            <div><p className="text-sm font-medium text-gray-500">Total Value</p><p className="text-lg text-gray-900">${selectedOrder.subtotal.toFixed(2)}</p></div>
+                            <div><p className="text-sm font-medium text-gray-500">Status</p><p className="text-lg text-gray-900 capitalize">{selectedOrder.status}</p></div>
+                        </div>
+                        <div className="mb-6"><p className="text-sm font-medium text-gray-500">Shipping Address</p><p className="text-md text-gray-900">{selectedOrder.address}</p><p className="text-sm text-gray-600">Email: {selectedOrder.customer_email}</p><p className="text-sm text-gray-600">Phone: {selectedOrder.customer_phone}</p></div>
+                        <div className="mb-6"><p className="text-sm font-medium text-gray-500">Tracking Number</p><p className="text-md text-gray-900">{selectedOrder.tracking_number || 'N/A'}</p><p className="text-sm text-gray-600">Carrier: {selectedOrder.carrier || 'N/A'}</p><p className="text-sm text-gray-600">Shipping Method: {selectedOrder.shipping_method || 'N/A'}</p></div>
+                        <h3 className="text-lg font-semibold text-gray-900 mb-3 border-b pb-2">Items in Order</h3>
+                        <div className="space-y-2 max-h-48 overflow-y-auto mb-6">{selectedOrder.item_list.map((item, index) => (<div key={index} className="flex justify-between items-center bg-gray-50 p-3 rounded"><div className="flex-1"><p className="text-sm font-medium text-gray-900">{item.item_name} ({item.size})</p><p className="text-xs text-gray-600">SKU: {item.sku} | Qty: {item.qty}</p></div>{item.price !== undefined && (<span className="text-sm font-medium text-gray-900">${(item.qty * item.price).toFixed(2)}</span>)}</div>))}</div>
+                        <div className="flex justify-end space-x-3">
+                            <button onClick={closeOrderDetailsModal} className="px-5 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">Close</button>
+                            <button onClick={() => { if (selectedOrder) printOrderSlip(selectedOrder) }} className="flex items-center space-x-2 px-5 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                                <PrinterIcon className="h-5 w-5" /><span>Print Order Slip</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {showStatusUpdateModal && orderToUpdateStatus && (
+                <div className="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center p-4 z-50">
+                    <div className="bg-white rounded-lg shadow-xl max-w-sm w-full p-6 relative">
+                        <button onClick={closeStatusUpdateModal} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><XIcon className="h-6 w-6" /></button>
+                        <h2 className="text-xl font-bold text-gray-900 mb-4">Update Status for Order: {orderToUpdateStatus.order_id}</h2>
+                        <p className="text-gray-600 mb-6">Current Status: <span className="font-semibold capitalize">{orderToUpdateStatus.status}</span></p>
+                        <div className="grid grid-cols-2 gap-3">{allOrderStatuses.map(status => (<button key={status} onClick={() => handleOrderStatusChange(orderToUpdateStatus.order_id, status)} className={`py-2 px-4 rounded-lg text-sm font-medium transition-colors duration-200 ${status === orderToUpdateStatus.status ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-100 text-gray-800 hover:bg-gray-200'} ${loading ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={loading}>{status}</button>))}</div>
+                        <div className="mt-6 flex justify-end"><button onClick={closeStatusUpdateModal} className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">Cancel</button></div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+export default WMSInterface;
