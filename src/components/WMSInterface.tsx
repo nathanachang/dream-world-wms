@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Item, Order, OrderStatus } from '../types';
 import { 
     PackageIcon, ShoppingCartIcon, BarChart3Icon, SearchIcon, 
@@ -6,23 +6,12 @@ import {
     MapPinIcon, DollarSignIcon, Edit3Icon, CheckIcon, EyeIcon, 
     TrendingUpIcon, PrinterIcon, DownloadIcon, LogOutIcon 
 } from './icons';
-
-// --- START: DUMMY DATA ---
-const dummyInventory: Item[] = [
-  { item_name: "Classic T-Shirt", sku: "TS-BLK-M", size: "M", bin: "A1", ln: "01", qty: 50, price: 19.99, last_updated: new Date('2025-08-04T14:20:00Z') },
-  { item_name: "Classic T-Shirt", sku: "TS-BLK-L", size: "L", bin: "A1", ln: "02", qty: 30, price: 19.99, last_updated: new Date('2025-08-04T14:20:00Z') },
-  { item_name: "Denim Jeans", sku: "JN-BLU-32", size: "32", bin: "B3", ln: "05", qty: 8, price: 49.99, last_updated: new Date('2025-08-03T11:05:00Z') },
-];
-const dummyOrders: Order[] = [
-    { order_id: "ORD-2025-001", customer: "Alice Johnson", timestamp: new Date('2025-08-01T10:30:00Z'), item_list: [{ item_name: "Classic T-Shirt", sku: "TS-BLK-M", size: "M", bin: "A1", ln: "01", qty: 2, price: 19.99, last_updated: new Date() }], tracking_number: "1Z9999999999999999", address: "123 Maple St, Springfield, IL 62704", subtotal: 39.98, customer_email: "alice@example.com", customer_phone: "555-123-4567", carrier: "UPS", shipping_method: "Ground", status: "Shipped" },
-    { order_id: "ORD-2025-002", customer: "Bob Smith", timestamp: new Date('2025-08-02T14:00:00Z'), item_list: [ { item_name: "Denim Jeans", sku: "JN-BLU-32", size: "32", bin: "B3", ln: "05", qty: 1, price: 49.99, last_updated: new Date() }, { item_name: "Hoodie", sku: "HD-GRY-L", size: "L", bin: "A2", ln: "04", qty: 1, price: 39.99, last_updated: new Date() } ], tracking_number: null, address: "456 Oak Ave, Anytown, USA 12345", subtotal: 89.98, customer_email: "bob@example.com", customer_phone: "555-987-6543", carrier: null, shipping_method: "Standard", status: "Pending" },
-];
-// --- END: DUMMY DATA ---
+import { fetchItems, fetchOrders, updateItemQuantity, updateOrderStatus } from '../services/api';
 
 const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
     const [activeTab, setActiveTab] = useState('inventory');
-    const [inventory, setInventory] = useState(dummyInventory);
-    const [orders, setOrders] = useState(dummyOrders);
+    const [inventory, setInventory] = useState<Item[]>([]);
+    const [orders, setOrders] = useState<Order[]>([]);
     const [searchTerm, setSearchTerm] = useState('');
     const [editingItem, setEditingItem] = useState<string | null>(null);
     const [newQty, setNewQty] = useState('');
@@ -37,6 +26,40 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
     const [orderToUpdateStatus, setOrderToUpdateStatus] = useState<Order | null>(null);
 
     const allOrderStatuses: OrderStatus[] = ['Pending', 'Processing', 'Shipped', 'Delivered', 'Cancelled'];
+
+    const loadInventory = useCallback(async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const data = await fetchItems();
+            setInventory(data);
+        } catch (err) {
+            setError('Failed to fetch inventory.');
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    const loadOrders = useCallback(async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            const data = await fetchOrders();
+            setOrders(data);
+        } catch (err) {
+            setError('Failed to fetch orders.');
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (activeTab === 'inventory') {
+            loadInventory();
+        } else if (activeTab === 'orders') {
+            loadOrders();
+        }
+    }, [activeTab, loadInventory, loadOrders]);
 
     const uniqueSizes = useMemo(() => Array.from(new Set(inventory.map(item => item.size))), [inventory]);
     const uniqueBins = useMemo(() => Array.from(new Set(inventory.map(item => item.bin))), [inventory]);
@@ -53,37 +76,51 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
         });
     }, [inventory, searchTerm, selectedSize, selectedBin]);
 
-    const handleQtyUpdate = (item: Item, newQtyValue: string) => {
+    const handleQtyUpdate = async (item: Item, newQtyValue: string) => {
         const qtyToUpdate = parseInt(newQtyValue, 10);
         if (isNaN(qtyToUpdate) || qtyToUpdate < 0) {
             setError('Quantity must be a non-negative number.');
             return;
         }
-        setLoading(true);
+
+        const originalInventory = [...inventory];
+        const updatedItem = { ...item, qty: qtyToUpdate, last_updated: new Date() };
+
+        // Optimistic update
+        setInventory(prev => prev.map(invItem => invItem.sku === item.sku ? updatedItem : invItem));
+        setEditingItem(null);
+        setNewQty('');
         setError(null);
-        setTimeout(() => {
-            setInventory(prev => prev.map(invItem =>
-                invItem.sku === item.sku ? { ...invItem, qty: qtyToUpdate, last_updated: new Date() } : invItem
-            ));
-            setEditingItem(null);
-            setNewQty('');
-            setLoading(false);
-        }, 500);
+
+        try {
+            await updateItemQuantity(item.sku, qtyToUpdate);
+        } catch (err) {
+            setError('Failed to update quantity. Reverting changes.');
+            // Revert on error
+            setInventory(originalInventory);
+        }
     };
 
-    const handleOrderStatusChange = (orderId: string, newStatus: OrderStatus) => {
-        setLoading(true);
+    const handleOrderStatusChange = async (orderId: string, newStatus: OrderStatus) => {
+        const originalOrders = [...orders];
+        const orderToUpdate = orders.find(o => o.order_id === orderId);
+        if (!orderToUpdate) return;
+
+        const updatedOrder = { ...orderToUpdate, status: newStatus };
+        const customerId = orderToUpdate.customer_id;
+
+        // Optimistic update
+        setOrders(prev => prev.map(order => order.order_id === orderId ? updatedOrder : order));
+        closeStatusUpdateModal();
         setError(null);
-        setTimeout(() => {
-            setOrders(prev => prev.map(order =>
-                order.order_id === orderId ? { ...order, status: newStatus } : order
-            ));
-            if (selectedOrder && selectedOrder.order_id === orderId) {
-                setSelectedOrder(prev => prev ? { ...prev, status: newStatus } : null);
-            }
-            closeStatusUpdateModal();
-            setLoading(false);
-        }, 500);
+
+        try {
+            await updateOrderStatus(orderId, customerId, newStatus);
+        } catch (err) {
+            setError('Failed to update order status. Reverting changes.');
+            // Revert on error
+            setOrders(originalOrders);
+        }
     };
     
     const openStatusUpdateModal = (order: Order) => {
@@ -163,7 +200,7 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
             <html>
             <head>
                 <title>Order Slip - ${order.order_id}</title>
-                <script src="https://cdn.tailwindcss.com"></script>
+                <script src="https://cdn.tailwindcss.com"><\/script>
                 <style>
                     body { font-family: Arial, sans-serif; }
                     @media print {
@@ -176,7 +213,7 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
                 <div class="max-w-4xl mx-auto bg-white p-8 border border-gray-300">
                     <div class="flex justify-between items-start mb-6">
                         <div>
-                            <h1 class="text-3xl font-bold">Your Company Name</h1>
+                            <h1 class="text-3xl font-bold">Dream World</h1>
                             <p>123 Warehouse St, Distribution City, DC 12345</p>
                         </div>
                         <div class="text-right">
@@ -191,8 +228,7 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
                         <div>
                             <h3 class="text-lg font-semibold border-b pb-2 mb-2">Sold To:</h3>
                             <p>${order.customer}</p>
-                            <p>${order.address}</p>
-                            <p>${order.customer_email}</p>
+                            <p>${order.address}</p>                            
                             <p>${order.customer_phone}</p>
                         </div>
                         <div>
@@ -206,7 +242,7 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
                         <div><p><strong>PO:</strong> N/A</p></div>
                         <div><p><strong>Terms:</strong> N/A</p></div>
                         <div><p><strong>Ship Via:</strong> ${order.carrier || 'N/A'}</p></div>
-                        <div><p><strong>SubTotal:</strong> $${order.subtotal.toFixed(2)}</p></div>
+                        <div><p><strong>SubTotal:</strong> $${order.subtotal}</p></div>
                     </div>
 
                     <table class="w-full text-left border-collapse mt-4">
@@ -266,10 +302,10 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
                     <div className="flex justify-between items-center py-4">
                         <div className="flex items-center space-x-3">
                             <PackageIcon className="h-8 w-8 text-blue-600" />
-                            <h1 className="text-2xl font-bold text-gray-900">Warehouse Management System</h1>
+                            <h1 className="text-2xl font-bold text-gray-900">Dream World Warehouse Management System</h1>
                         </div>
                         <div className="flex items-center space-x-4">
-                            {loading && <div className="text-sm text-blue-500 flex items-center space-x-2"><ClockIcon className="h-4 w-4 animate-spin" /><span>Loading...</span></div>}
+                            {loading && <div className="text-sm text-blue-500 flex items-center space-x-2"><ClockIcon className="h-4 w-4 animate-spin" /><span>Syncing...</span></div>}
                             {error && <div className="text-sm text-red-500 flex items-center space-x-2"><AlertCircleIcon className="h-4 w-4" /><span>{error}</span></div>}
                             <div className="text-sm text-gray-500">Last sync: {new Date().toLocaleTimeString()}</div>
                             <button onClick={onLogout} className="flex items-center space-x-2 text-sm text-gray-600 hover:text-blue-600">
@@ -350,7 +386,7 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
                             <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><ShoppingCartIcon className="h-8 w-8 text-blue-600" /><div><p className="text-sm font-medium text-gray-500">Total Orders</p><p className="text-2xl font-semibold text-gray-900">{orders.length}</p></div></div>
                             <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><ClockIcon className="h-8 w-8 text-yellow-600" /><div><p className="text-sm font-medium text-gray-500">Pending Orders</p><p className="text-2xl font-semibold text-gray-900">{orders.filter(o => o.status === 'Pending').length}</p></div></div>
                             <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><TruckIcon className="h-8 w-8 text-green-600" /><div><p className="text-sm font-medium text-gray-500">Shipped Orders</p><p className="text-2xl font-semibold text-gray-900">{orders.filter(o => o.status === 'Shipped' || o.status === 'Delivered').length}</p></div></div>
-                            <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><DollarSignIcon className="h-8 w-8 text-purple-600" /><div><p className="text-sm font-medium text-gray-500">Total Value</p><p className="text-2xl font-semibold text-gray-900">${getTotalOrderValue().toFixed(2)}</p></div></div>
+                            <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><DollarSignIcon className="h-8 w-8 text-purple-600" /><div><p className="text-sm font-medium text-gray-500">Total Value</p><p className="text-2xl font-semibold text-gray-900">${getTotalOrderValue()}</p></div></div>
                         </div>
                         <div className="space-y-4">
                             {orders.map(order => {
@@ -363,7 +399,7 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
                                                 <div><h3 className="text-lg font-medium text-gray-900">{order.order_id}</h3><p className="text-sm text-gray-500">{order.customer}</p></div>
                                                 <button onClick={() => openStatusUpdateModal(order)} className={`flex items-center space-x-2 px-3 py-1 rounded-full text-sm font-medium ${orderStatus.bg} ${orderStatus.color} hover:opacity-80 transition-opacity`} disabled={loading}><StatusIcon className="h-4 w-4" /><span className="capitalize">{order.status}</span><Edit3Icon className="h-3 w-3" /></button>
                                             </div>
-                                            <div className="text-right"><p className="text-lg font-semibold text-gray-900">${order.subtotal.toFixed(2)}</p><p className="text-sm text-gray-500">{formatDateTime(order.timestamp)}</p></div>
+                                            <div className="text-right"><p className="text-lg font-semibold text-gray-900">${order.subtotal}</p><p className="text-sm text-gray-500">{formatDateTime(order.timestamp)}</p></div>
                                         </div>
                                         <div className="mt-4 flex justify-end space-x-2">
                                             <button onClick={() => openOrderDetailsModal(order)} className="flex items-center space-x-2 px-4 py-2 border border-gray-300 text-gray-700 text-sm rounded-lg hover:bg-gray-50"><EyeIcon className="h-4 w-4" /><span>View Details</span></button>
@@ -416,13 +452,13 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                             <div><p className="text-sm font-medium text-gray-500">Customer Name</p><p className="text-lg text-gray-900">{selectedOrder.customer}</p></div>
                             <div><p className="text-sm font-medium text-gray-500">Order Date</p><p className="text-lg text-gray-900">{formatDateTime(selectedOrder.timestamp)}</p></div>
-                            <div><p className="text-sm font-medium text-gray-500">Total Value</p><p className="text-lg text-gray-900">${selectedOrder.subtotal.toFixed(2)}</p></div>
+                            <div><p className="text-sm font-medium text-gray-500">Total Value</p><p className="text-lg text-gray-900">${selectedOrder.subtotal}</p></div>
                             <div><p className="text-sm font-medium text-gray-500">Status</p><p className="text-lg text-gray-900 capitalize">{selectedOrder.status}</p></div>
                         </div>
-                        <div className="mb-6"><p className="text-sm font-medium text-gray-500">Shipping Address</p><p className="text-md text-gray-900">{selectedOrder.address}</p><p className="text-sm text-gray-600">Email: {selectedOrder.customer_email}</p><p className="text-sm text-gray-600">Phone: {selectedOrder.customer_phone}</p></div>
+                        <div className="mb-6"><p className="text-sm font-medium text-gray-500">Shipping Address</p><p className="text-md text-gray-900">{selectedOrder.address}</p><p className="text-sm text-gray-600">Phone: {selectedOrder.customer_phone}</p></div>
                         <div className="mb-6"><p className="text-sm font-medium text-gray-500">Tracking Number</p><p className="text-md text-gray-900">{selectedOrder.tracking_number || 'N/A'}</p><p className="text-sm text-gray-600">Carrier: {selectedOrder.carrier || 'N/A'}</p><p className="text-sm text-gray-600">Shipping Method: {selectedOrder.shipping_method || 'N/A'}</p></div>
                         <h3 className="text-lg font-semibold text-gray-900 mb-3 border-b pb-2">Items in Order</h3>
-                        <div className="space-y-2 max-h-48 overflow-y-auto mb-6">{selectedOrder.item_list.map((item, index) => (<div key={index} className="flex justify-between items-center bg-gray-50 p-3 rounded"><div className="flex-1"><p className="text-sm font-medium text-gray-900">{item.item_name} ({item.size})</p><p className="text-xs text-gray-600">SKU: {item.sku} | Qty: {item.qty}</p></div>{item.price !== undefined && (<span className="text-sm font-medium text-gray-900">${(item.qty * item.price).toFixed(2)}</span>)}</div>))}</div>
+                        <div className="space-y-2 max-h-48 overflow-y-auto mb-6">{selectedOrder.item_list.map((item, index) => (<div key={index} className="flex justify-between items-center bg-gray-50 p-3 rounded"><div className="flex-1"><p className="text-sm font-medium text-gray-900">{item.item_name} ({item.size})</p><p className="text-xs text-gray-600">SKU: {item.sku} | Qty: {item.qty}</p></div>{item.price !== undefined && (<span className="text-sm font-medium text-gray-900">${(item.qty * item.price)}</span>)}</div>))}</div>
                         <div className="flex justify-end space-x-3">
                             <button onClick={closeOrderDetailsModal} className="px-5 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">Close</button>
                             <button onClick={() => { if (selectedOrder) printOrderSlip(selectedOrder) }} className="flex items-center space-x-2 px-5 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">

@@ -14,12 +14,12 @@ export interface Item {
 export interface Order {
   order_id: string;
   customer: string;
+  customer_id: string;
   timestamp: Date;
   item_list: Item[];
   tracking_number: string | null;
   address: string;
-  subtotal: number;
-  customer_email: string;
+  subtotal: number;  
   customer_phone: string;
   carrier: string | null;
   shipping_method: string | null;
