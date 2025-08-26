@@ -6,7 +6,7 @@ import {
     MapPinIcon, DollarSignIcon, Edit3Icon, CheckIcon, EyeIcon, 
     TrendingUpIcon, PrinterIcon, DownloadIcon, LogOutIcon 
 } from './icons';
-import { fetchItems, fetchOrders, updateItemQuantity, updateOrderStatus } from '../services/api';
+import { fetchItems, fetchOrders, updateItemQuantity, updateOrderStatus, updateOrderTracking } from '../services/api';
 
 const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
     const [activeTab, setActiveTab] = useState('inventory');
@@ -23,7 +23,9 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
     const [showLabelModal, setShowLabelModal] = useState(false);
     const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
     const [showStatusUpdateModal, setShowStatusUpdateModal] = useState(false);
-    const [orderToUpdateStatus, setOrderToUpdateStatus] = useState<Order | null>(null);
+    const [orderToUpdateStatus, setOrderToUpdateStatus] = useState<Order | null>(null);     
+    const [editingCarrier, setEditingCarrier] = useState('');
+    const [editingTrackingNumber, setEditingTrackingNumber] = useState('');
 
     const allOrderStatuses: OrderStatus[] = ['Pending', 'Processing', 'Shipped', 'Delivered', 'Cancelled'];
 
@@ -119,6 +121,32 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
         } catch (err) {
             setError('Failed to update order status. Reverting changes.');
             // Revert on error
+            setOrders(originalOrders);
+        }
+    };
+    
+    const handleUpdateTrackingDetails = async () => {
+        if (!selectedOrder) return;
+
+        const originalOrders = [...orders];
+        const updatedOrder = { 
+            ...selectedOrder, 
+            carrier: editingCarrier, 
+            tracking_number: editingTrackingNumber 
+        };
+
+        // Optimistic update
+        setOrders(prev => prev.map(order => order.order_id === selectedOrder.order_id ? updatedOrder : order));
+        closeOrderDetailsModal();
+        setError(null);
+
+        try {
+            await updateOrderTracking(selectedOrder.order_id, selectedOrder.customer_id, {
+                carrier: editingCarrier,
+                tracking_number: editingTrackingNumber,
+            });
+        } catch (err) {
+            setError('Failed to update tracking details. Reverting changes.');
             setOrders(originalOrders);
         }
     };
@@ -287,6 +315,8 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
 
     const openOrderDetailsModal = (order: Order) => {
         setSelectedOrder(order);
+        setEditingCarrier(order.carrier || '');
+        setEditingTrackingNumber(order.tracking_number || '');
         setShowLabelModal(true);
     };
 
@@ -456,11 +486,33 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
                             <div><p className="text-sm font-medium text-gray-500">Status</p><p className="text-lg text-gray-900 capitalize">{selectedOrder.status}</p></div>
                         </div>
                         <div className="mb-6"><p className="text-sm font-medium text-gray-500">Shipping Address</p><p className="text-md text-gray-900">{selectedOrder.address}</p><p className="text-sm text-gray-600">Phone: {selectedOrder.customer_phone}</p></div>
-                        <div className="mb-6"><p className="text-sm font-medium text-gray-500">Tracking Number</p><p className="text-md text-gray-900">{selectedOrder.tracking_number || 'N/A'}</p><p className="text-sm text-gray-600">Carrier: {selectedOrder.carrier || 'N/A'}</p><p className="text-sm text-gray-600">Shipping Method: {selectedOrder.shipping_method || 'N/A'}</p></div>
+                        <div className="mb-6 space-y-4">
+                            <div>
+                                <label className="text-sm font-medium text-gray-500">Carrier</label>
+                                <input
+                                    type="text"
+                                    value={editingCarrier}
+                                    onChange={(e) => setEditingCarrier(e.target.value)}
+                                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                                />
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium text-gray-500">Tracking Number</label>
+                                <input
+                                    type="text"
+                                    value={editingTrackingNumber}
+                                    onChange={(e) => setEditingTrackingNumber(e.target.value)}
+                                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                                />
+                            </div>
+                        </div>
                         <h3 className="text-lg font-semibold text-gray-900 mb-3 border-b pb-2">Items in Order</h3>
                         <div className="space-y-2 max-h-48 overflow-y-auto mb-6">{selectedOrder.item_list.map((item, index) => (<div key={index} className="flex justify-between items-center bg-gray-50 p-3 rounded"><div className="flex-1"><p className="text-sm font-medium text-gray-900">{item.item_name} ({item.size})</p><p className="text-xs text-gray-600">SKU: {item.sku} | Qty: {item.qty}</p></div>{item.price !== undefined && (<span className="text-sm font-medium text-gray-900">${(item.qty * item.price)}</span>)}</div>))}</div>
                         <div className="flex justify-end space-x-3">
-                            <button onClick={closeOrderDetailsModal} className="px-5 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">Close</button>
+                            <button onClick={closeOrderDetailsModal} className="px-5 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">Cancel</button>
+                            <button onClick={handleUpdateTrackingDetails} className="flex items-center space-x-2 px-5 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
+                                <CheckIcon className="h-5 w-5" /><span>Save Changes</span>
+                            </button>
                             <button onClick={() => { if (selectedOrder) printOrderSlip(selectedOrder) }} className="flex items-center space-x-2 px-5 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
                                 <PrinterIcon className="h-5 w-5" /><span>Print Order Slip</span>
                             </button>
