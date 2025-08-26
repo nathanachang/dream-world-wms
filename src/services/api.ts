@@ -105,3 +105,31 @@ export const updateOrderStatus = async (
     throw error;
   }
 };
+
+// PATCH /order/{id} - Tracking
+export const updateOrderTracking = async (
+  orderId: string,
+  customerId: string,
+  trackingDetails: { carrier: string; tracking_number: string }
+): Promise<Order> => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/order/${customerId}/${orderId}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(trackingDetails),
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const data = await response.json();
+    return {
+      ...data,      
+      timestamp: new Date(data.timestamp),
+    };
+  } catch (error) {
+    console.error("Error updating order tracking:", error);
+    throw error;
+  }
+};
