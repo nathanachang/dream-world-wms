@@ -1,7 +1,7 @@
 // src/services/api.ts
 import { Item, Order, OrderStatus } from '../types';
 
-const API_BASE_URL = 'https://6yui8nj2ic.execute-api.us-east-1.amazonaws.com/dev'; 
+const API_BASE_URL = 'https://9u8ga3cd25.execute-api.us-east-1.amazonaws.com/dev'; 
 
 // GET /item
 export const fetchItems = async (): Promise<Item[]> => {
@@ -13,10 +13,14 @@ export const fetchItems = async (): Promise<Item[]> => {
     const data = await response.json();
     // Convert ISO string to Date objects
     return data.map((item: any) => ({
-      ...item,
-      qty: parseInt(item.qty, 10),
+      sku: item.sku,
+      item_desc: item.item_desc,
+      bin: item.bin_loc,
+      dsu: item.default_selling_unit,
+      item_type: item.item_type,
+      qty: parseInt(item.qty_on_hand, 10),
       price: parseFloat(item.price),
-      last_updated: new Date(item.last_updated),
+      last_updated: !item.last_updated ? new Date() : new Date(item.last_updated),
     }));
   } catch (error) {
     console.error("Error fetching inventory:", error);
@@ -24,30 +28,34 @@ export const fetchItems = async (): Promise<Item[]> => {
   }
 };
 
-// PATCH /item/{id}
-export const updateItemQuantity = async (
+// PATCH /item/{sku}
+export const updateItem = async (
   sku: string,
-  newQty: number
+  itemDetails: Partial<Item>
 ): Promise<Item> => {
+  // Map frontend Item fields to backend DynamoDB fields
+  const payload: { [key: string]: any } = {};
+  if (itemDetails.item_desc !== undefined) payload.item_desc = itemDetails.item_desc;
+  if (itemDetails.bin !== undefined) payload.bin_loc = itemDetails.bin;
+  if (itemDetails.dsu !== undefined) payload.default_selling_unit = itemDetails.dsu;
+  if (itemDetails.item_type !== undefined) payload.item_type = itemDetails.item_type;
+  if (itemDetails.qty !== undefined) payload.qty_on_hand = itemDetails.qty;
+  if (itemDetails.price !== undefined) payload.price = itemDetails.price;
+
   try {
     const response = await fetch(`${API_BASE_URL}/item/${sku}`, {
       method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ qty: newQty }),
+      body: JSON.stringify(payload),
     });
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-    const data = await response.json();
-    console.log(data);
-    return {
-      ...data,
-      last_updated: new Date(data.last_updated),
-    };
+    return await response.json();
   } catch (error) {
-    console.error("Error updating inventory quantity:", error);
+    console.error("Error updating item:", error);
     throw error;
   }
 };

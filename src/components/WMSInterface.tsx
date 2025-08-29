@@ -6,26 +6,28 @@ import {
     MapPinIcon, DollarSignIcon, Edit3Icon, CheckIcon, EyeIcon, 
     TrendingUpIcon, PrinterIcon, DownloadIcon, LogOutIcon 
 } from './icons';
-import { fetchItems, fetchOrders, updateItemQuantity, updateOrderStatus, updateOrderTracking } from '../services/api';
+import { fetchItems, fetchOrders, updateItem, updateOrderStatus, updateOrderTracking } from '../services/api';
 
 const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
     const [activeTab, setActiveTab] = useState('inventory');
     const [inventory, setInventory] = useState<Item[]>([]);
     const [orders, setOrders] = useState<Order[]>([]);
     const [searchTerm, setSearchTerm] = useState('');
-    const [editingItem, setEditingItem] = useState<string | null>(null);
-    const [newQty, setNewQty] = useState('');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [selectedSize, setSelectedSize] = useState('all');
+    const [selectedItemType, setSelectedItemType] = useState('all');
     const [selectedBin, setSelectedBin] = useState('all');
     const [dateRange, setDateRange] = useState('7');
     const [showLabelModal, setShowLabelModal] = useState(false);
     const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
     const [showStatusUpdateModal, setShowStatusUpdateModal] = useState(false);
-    const [orderToUpdateStatus, setOrderToUpdateStatus] = useState<Order | null>(null);     
+    const [orderToUpdateStatus, setOrderToUpdateStatus] = useState<Order | null>(null);
     const [editingCarrier, setEditingCarrier] = useState('');
     const [editingTrackingNumber, setEditingTrackingNumber] = useState('');
+    const [showEditItemModal, setShowEditItemModal] = useState(false);
+    const [editingItemDetails, setEditingItemDetails] = useState<Item | null>(null);
+    const [activeStockFilters, setActiveStockFilters] = useState<('low' | 'out')[]>([]);
+    const [sortConfig, setSortConfig] = useState<{ key: keyof Item; direction: 'ascending' | 'descending' } | null>(null);
 
     const allOrderStatuses: OrderStatus[] = ['Pending', 'Processing', 'Shipped', 'Delivered', 'Cancelled'];
 
@@ -63,46 +65,85 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
         }
     }, [activeTab, loadInventory, loadOrders]);
 
-    const uniqueSizes = useMemo(() => Array.from(new Set(inventory.map(item => item.size))), [inventory]);
+    const uniqueItemTypes = useMemo(() => Array.from(new Set(inventory.map(item => item.item_type).filter(Boolean))), [inventory]);
     const uniqueBins = useMemo(() => Array.from(new Set(inventory.map(item => item.bin))), [inventory]);
 
     const filteredInventory = useMemo(() => {
-        return inventory.filter(item => {
-            const matchesSearch = item.item_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        let sortableItems = [...inventory];
+        
+        let filtered = inventory.filter(item => {
+            const matchesSearch = item.item_desc.toLowerCase().includes(searchTerm.toLowerCase()) ||
                 item.sku.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                item.bin.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                item.ln.toLowerCase().includes(searchTerm.toLowerCase());
-            const matchesSize = selectedSize === 'all' || item.size === selectedSize;
+                item.bin.toLowerCase().includes(searchTerm.toLowerCase());
+            const matchesItemType = selectedItemType === 'all' || item.item_type === selectedItemType;
             const matchesBin = selectedBin === 'all' || item.bin === selectedBin;
-            return matchesSearch && matchesSize && matchesBin;
+            return matchesSearch && matchesItemType && matchesBin;
         });
-    }, [inventory, searchTerm, selectedSize, selectedBin]);
 
-    const handleQtyUpdate = async (item: Item, newQtyValue: string) => {
-        const qtyToUpdate = parseInt(newQtyValue, 10);
-        if (isNaN(qtyToUpdate) || qtyToUpdate < 0) {
-            setError('Quantity must be a non-negative number.');
-            return;
+        if (activeStockFilters.length > 0) {
+            filtered = filtered.filter(item => {
+                if (activeStockFilters.includes('low') && item.qty > 0 && item.qty <= 100) {
+                    return true;
+                }
+                if (activeStockFilters.includes('out') && item.qty === 0) {
+                    return true;
+                }
+                return false;
+            });
+        }
+        
+        if (sortConfig !== null) {
+            filtered.sort((a, b) => {
+                const aValue = a[sortConfig.key];
+                const bValue = b[sortConfig.key];
+
+                if (!aValue) {
+                    return 1;
+                }
+                if (!bValue) {
+                    return -1;
+                }
+
+                if (aValue < bValue) {
+                    return sortConfig.direction === 'ascending' ? -1 : 1;
+                }
+                if (aValue > bValue) {
+                    return sortConfig.direction === 'ascending' ? 1 : -1;
+                }
+                return 0;
+            });
         }
 
-        const originalInventory = [...inventory];
-        const updatedItem = { ...item, qty: qtyToUpdate, last_updated: new Date() };
 
+        return filtered;
+    }, [inventory, searchTerm, selectedItemType, selectedBin, activeStockFilters, sortConfig]);
+    
+    const requestSort = (key: keyof Item) => {
+        let direction: 'ascending' | 'descending' = 'ascending';
+        if (sortConfig && sortConfig.key === key && sortConfig.direction === 'ascending') {
+            direction = 'descending';
+        }
+        setSortConfig({ key, direction });
+    };
+
+    const handleSaveItemDetails = async () => {
+        if (!editingItemDetails) return;
+
+        const originalInventory = [...inventory];
+        
         // Optimistic update
-        setInventory(prev => prev.map(invItem => invItem.sku === item.sku ? updatedItem : invItem));
-        setEditingItem(null);
-        setNewQty('');
+        setInventory(prev => prev.map(item => item.sku === editingItemDetails.sku ? editingItemDetails : item));
+        closeEditItemModal();
         setError(null);
 
         try {
-            await updateItemQuantity(item.sku, qtyToUpdate);
+            await updateItem(editingItemDetails.sku, editingItemDetails);
         } catch (err) {
-            setError('Failed to update quantity. Reverting changes.');
-            // Revert on error
+            setError('Failed to update item. Reverting changes.');
             setInventory(originalInventory);
         }
     };
-
+    
     const handleOrderStatusChange = async (orderId: string, newStatus: OrderStatus) => {
         const originalOrders = [...orders];
         const orderToUpdate = orders.find(o => o.order_id === orderId);
@@ -124,7 +165,7 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
             setOrders(originalOrders);
         }
     };
-    
+
     const handleUpdateTrackingDetails = async () => {
         if (!selectedOrder) return;
 
@@ -151,6 +192,44 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
         }
     };
     
+    const openEditItemModal = (item: Item) => {
+        setEditingItemDetails({ ...item });
+        setShowEditItemModal(true);
+    };
+
+    const closeEditItemModal = () => {
+        setEditingItemDetails(null);
+        setShowEditItemModal(false);
+    };
+
+    const handleItemDetailChange = (field: keyof Item, value: any) => {
+        if (editingItemDetails) {
+            setEditingItemDetails({ ...editingItemDetails, [field]: value });
+        }
+    };
+    
+    const handlePriceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const value = e.target.value;
+        if ((value === "" || /^\d*\.?\d{0,2}$/.test(value)) && editingItemDetails) {
+            setEditingItemDetails({ ...editingItemDetails, price: value as any });
+        }
+    };
+
+    const formatPriceOnBlur = () => {
+        if (editingItemDetails) {
+            const price = parseFloat(editingItemDetails.price as any);
+            const formattedPrice = isNaN(price) ? 0.00 : price;
+            setEditingItemDetails({ ...editingItemDetails, price: formattedPrice });
+        }
+    };
+
+    const handleQtyAdjustment = (amount: number) => {
+        if (editingItemDetails) {
+            const newQty = Math.max(0, editingItemDetails.qty + amount);
+            setEditingItemDetails({ ...editingItemDetails, qty: newQty });
+        }
+    };
+    
     const openStatusUpdateModal = (order: Order) => {
         setOrderToUpdateStatus(order);
         setShowStatusUpdateModal(true);
@@ -163,7 +242,7 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
 
     const getStockStatus = (qty: number) => {
         if (qty === 0) return { status: 'out', color: 'text-red-600', bg: 'bg-red-100' };
-        if (qty <= 10) return { status: 'low', color: 'text-orange-600', bg: 'bg-orange-100' };
+        if (qty <= 100) return { status: 'low', color: 'text-orange-600', bg: 'bg-orange-100' };
         return { status: 'good', color: 'text-green-600', bg: 'bg-green-100' };
     };
 
@@ -189,6 +268,14 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
     const getTotalInventoryItems = () => inventory.reduce((sum, item) => sum + item.qty, 0);
     const getUniqueSKUs = () => Array.from(new Set(inventory.map(i => i.sku))).length;
 
+    const handleStockFilter = (filter: 'low' | 'out') => {
+        setActiveStockFilters(prev => 
+            prev.includes(filter) 
+                ? prev.filter(f => f !== filter) 
+                : [...prev, filter]
+        );
+    };
+    
     const getAnalyticsData = () => {
         const days = parseInt(dateRange);
         const cutoffDate = new Date();
@@ -202,13 +289,13 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
         const productSales: { [key: string]: number } = {};
         recentOrders.forEach(order => {
             order.item_list.forEach(item => {
-                const key = `${item.item_name} (${item.size})`;
+                const key = `${item.item_desc} (${item.item_type})`;
                 productSales[key] = (productSales[key] || 0) + item.qty;
             });
         });
         const topProducts = Object.entries(productSales).sort(([, a], [, b]) => b - a).slice(0, 5).map(([name, qty]) => ({ name, qty }));
         const totalInventoryValue = inventory.reduce((sum, item) => sum + (item.qty * (item.price || 0)), 0);
-        const lowStockItems = inventory.filter(item => item.qty > 0 && item.qty <= 10).length;
+        const lowStockItems = inventory.filter(item => item.qty > 0 && item.qty <= 100).length;
         const outOfStockItems = inventory.filter(item => item.qty === 0).length;
         const dailyRevenue = Array.from({ length: days }, (_, i) => {
             const date = new Date();
@@ -289,10 +376,9 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
                             ${order.item_list.map((item, index) => `
                                 <tr class="hover:bg-gray-50">
                                     <td class="p-2 border">${item.bin}</td>
-                                    <td class="p-2 border">${item.ln}</td>
                                     <td class="p-2 border">${item.sku}</td>
-                                    <td class="p-2 border">${item.item_name}</td>
-                                    <td class="p-2 border text-center">${item.size}</td>
+                                    <td class="p-2 border">${item.item_desc}</td>
+                                    <td class="p-2 border text-center">${item.item_type}</td>
                                     <td class="p-2 border text-center">${item.qty}</td>
                                     <td class="p-2 border text-center"></td>
                                 </tr>
@@ -373,34 +459,62 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
                                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                                         <SearchIcon className="h-5 w-5 text-gray-400" />
                                     </div>
-                                    <input type="text" placeholder="Search items, SKU, bin, or line..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
+                                    <input type="text" placeholder="Search description, SKU, or bin..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
                                 </div>
-                                <select value={selectedSize} onChange={(e) => setSelectedSize(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"><option value="all">All Sizes</option>{uniqueSizes.map(size => <option key={size} value={size}>{size}</option>)}</select>
-                                <select value={selectedBin} onChange={(e) => setSelectedBin(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"><option value="all">All Bins</option>{uniqueBins.map(bin => <option key={bin} value={bin}>{bin}</option>)}</select>
+                                <select value={selectedItemType} onChange={(e) => setSelectedItemType(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                    <option value="all">All Item Types</option>
+                                    {uniqueItemTypes.map(type => <option key={type} value={type}>{type}</option>)}
+                                </select>
+                                <select value={selectedBin} onChange={(e) => setSelectedBin(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                    <option value="all">All Bins</option>
+                                    {uniqueBins.map(bin => <option key={bin} value={bin}>{bin}</option>)}
+                                </select>
                             </div>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                             <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><PackageIcon className="h-8 w-8 text-blue-600" /><div><p className="text-sm font-medium text-gray-500">Total Units</p><p className="text-2xl font-semibold text-gray-900">{getTotalInventoryItems()}</p></div></div>
-                            <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><AlertCircleIcon className="h-8 w-8 text-orange-600" /><div><p className="text-sm font-medium text-gray-500">Low Stock Items</p><p className="text-2xl font-semibold text-gray-900">{inventory.filter(i => i.qty > 0 && i.qty <= 10).length}</p></div></div>
-                            <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><XIcon className="h-8 w-8 text-red-600" /><div><p className="text-sm font-medium text-gray-500">Out of Stock</p><p className="text-2xl font-semibold text-gray-900">{inventory.filter(i => i.qty === 0).length}</p></div></div>
+                            <button onClick={() => handleStockFilter('low')} className={`p-6 rounded-lg shadow flex items-center space-x-4 text-left transition-colors ${activeStockFilters.includes('low') ? 'bg-gray-200' : 'bg-white'}`}>
+                                <AlertCircleIcon className="h-8 w-8 text-orange-600" />
+                                <div>
+                                    <p className="text-sm font-medium text-gray-500">Low Stock Items</p>
+                                    <p className="text-2xl font-semibold text-gray-900">{inventory.filter(i => i.qty > 0 && i.qty <= 100).length}</p>
+                                </div>
+                            </button>
+                            <button onClick={() => handleStockFilter('out')} className={`p-6 rounded-lg shadow flex items-center space-x-4 text-left transition-colors ${activeStockFilters.includes('out') ? 'bg-gray-200' : 'bg-white'}`}>
+                                <XIcon className="h-8 w-8 text-red-600" />
+                                <div>
+                                    <p className="text-sm font-medium text-gray-500">Out of Stock</p>
+                                    <p className="text-2xl font-semibold text-gray-900">{inventory.filter(i => i.qty === 0).length}</p>
+                                </div>
+                            </button>
                             <div className="bg-white p-6 rounded-lg shadow flex items-center space-x-4"><CheckCircleIcon className="h-8 w-8 text-green-600" /><div><p className="text-sm font-medium text-gray-500">Unique SKUs</p><p className="text-2xl font-semibold text-gray-900">{getUniqueSKUs()}</p></div></div>
                         </div>
                         <div className="bg-white shadow rounded-lg overflow-hidden">
                             <div className="overflow-x-auto">
                                 <table className="min-w-full divide-y divide-gray-200">
-                                    <thead className="bg-gray-50"><tr><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Item</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SKU</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Size</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Location</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Quantity</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Updated</th><th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th></tr></thead>
+                                    <thead className="bg-gray-50">
+                                        <tr>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"><button onClick={() => requestSort('sku')} className="flex items-center space-x-1"><span>SKU</span>{sortConfig?.key === 'sku' && (<span>{sortConfig.direction === 'ascending' ? '▲' : '▼'}</span>)}</button></th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"><button onClick={() => requestSort('item_desc')} className="flex items-center space-x-1"><span>Description</span>{sortConfig?.key === 'item_desc' && (<span>{sortConfig.direction === 'ascending' ? '▲' : '▼'}</span>)}</button></th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"><button onClick={() => requestSort('item_type')} className="flex items-center space-x-1"><span>Item Type</span>{sortConfig?.key === 'item_type' && (<span>{sortConfig.direction === 'ascending' ? '▲' : '▼'}</span>)}</button></th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"><button onClick={() => requestSort('bin')} className="flex items-center space-x-1"><span>Location (Bin)</span>{sortConfig?.key === 'bin' && (<span>{sortConfig.direction === 'ascending' ? '▲' : '▼'}</span>)}</button></th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"><button onClick={() => requestSort('dsu')} className="flex items-center space-x-1"><span>DSU</span>{sortConfig?.key === 'dsu' && (<span>{sortConfig.direction === 'ascending' ? '▲' : '▼'}</span>)}</button></th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"><button onClick={() => requestSort('qty')} className="flex items-center space-x-1"><span>Quantity</span>{sortConfig?.key === 'qty' && (<span>{sortConfig.direction === 'ascending' ? '▲' : '▼'}</span>)}</button></th>
+                                        </tr>
+                                    </thead>
                                     <tbody className="bg-white divide-y divide-gray-200">
                                         {filteredInventory.map(item => {
                                             const stockStatus = getStockStatus(item.qty);
                                             const itemKey = item.sku;
-                                            return (<tr key={itemKey} className="hover:bg-gray-50">
-                                                <td className="px-6 py-4 whitespace-nowrap"><div className="text-sm font-medium text-gray-900">{item.item_name}</div></td>
+                                            return (<tr key={item.sku} className="hover:bg-gray-50">
                                                 <td className="px-6 py-4 whitespace-nowrap"><div className="text-sm text-gray-900">{item.sku}</div></td>
-                                                <td className="px-6 py-4 whitespace-nowrap"><span className="px-2 py-1 text-xs font-medium bg-gray-100 text-gray-800 rounded-full">{item.size}</span></td>
-                                                <td className="px-6 py-4 whitespace-nowrap"><div className="flex items-center space-x-2 text-sm text-gray-900"><MapPinIcon className="h-4 w-4 text-gray-400" /><span>{item.bin}</span></div><div className="text-xs text-gray-500 ml-6">Line: {item.ln}</div></td>
-                                                <td className="px-6 py-4 whitespace-nowrap">{editingItem === itemKey ? (<div className="flex items-center space-x-2"><input type="number" value={newQty} onChange={e => setNewQty(e.target.value)} className="w-20 px-2 py-1 border border-gray-300 rounded text-sm" min="0" /><button onClick={() => handleQtyUpdate(item, newQty)} disabled={loading} className="text-green-600 hover:text-green-800"><CheckIcon className="h-4 w-4" /></button><button onClick={() => { setEditingItem(null); setNewQty(''); }} className="text-red-600 hover:text-red-800"><XIcon className="h-4 w-4" /></button></div>) : (<span className={`px-2 py-1 text-xs font-medium ${stockStatus.bg} ${stockStatus.color} rounded-full`}>{item.qty} units</span>)}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap"><div className="text-sm font-medium text-gray-900">{item.item_desc}</div></td>
+                                                <td className="px-6 py-4 whitespace-nowrap"><span className="px-2 py-1 text-xs font-medium bg-gray-100 text-gray-800 rounded-full">{item.item_type || 'N/A'}</span></td>
+                                                <td className="px-6 py-4 whitespace-nowrap"><div className="flex items-center space-x-2 text-sm text-gray-900"><MapPinIcon className="h-4 w-4 text-gray-400" /><span>{item.bin}</span></div></td>
+                                                <td className="px-6 py-4 whitespace-nowrap"><div className="text-sm text-gray-900">{item.dsu}</div></td>
+                                                <td className="px-6 py-4 whitespace-nowrap"><span className={`px-2 py-1 text-xs font-medium ${getStockStatus(item.qty).bg} ${getStockStatus(item.qty).color} rounded-full`}>{item.qty} units</span></td>
                                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatDateTime(item.last_updated)}</td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium"><button onClick={() => { setEditingItem(itemKey); setNewQty(item.qty.toString()); }} className="flex items-center space-x-2 text-blue-600 hover:text-blue-800"><Edit3Icon className="h-4 w-4" /><span>Update</span></button></td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium"><button onClick={() => openEditItemModal(item)} className="flex items-center space-x-2 text-blue-600 hover:text-blue-800"><Edit3Icon className="h-4 w-4" /><span>Update</span></button></td>
                                             </tr>)
                                         })}
                                     </tbody>
@@ -474,6 +588,71 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
                 )}
             </main>
 
+            {showEditItemModal && editingItemDetails && (
+                <div className="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center p-4 z-50">
+                    <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full p-6 relative">
+                        <button onClick={closeEditItemModal} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><XIcon className="h-6 w-6" /></button>
+                        <h2 className="text-2xl font-bold text-gray-900 mb-6 border-b pb-3">Edit Item: {editingItemDetails.sku}</h2>
+                        
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-sm font-medium text-gray-700">Description</label>
+                                <input type="text" value={editingItemDetails.item_desc} onChange={(e) => handleItemDetailChange('item_desc', e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm" />
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-sm font-medium text-gray-700">Bin Location</label>
+                                    <input type="text" value={editingItemDetails.bin} onChange={(e) => handleItemDetailChange('bin', e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm" />
+                                </div>
+                                <div>
+                                    <label className="text-sm font-medium text-gray-700">Default Selling Unit (DSU)</label>
+                                    <input type="text" value={editingItemDetails.dsu} onChange={(e) => handleItemDetailChange('dsu', e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm" />
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-sm font-medium text-gray-700">Item Type</label>
+                                    <input type="text" value={editingItemDetails.item_type || ''} onChange={(e) => handleItemDetailChange('item_type', e.target.value)} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm" />
+                                </div>
+                                <div>
+                                    <label className="text-sm font-medium text-gray-700">Price</label>
+                                    <input 
+                                        type="text" 
+                                        value={typeof editingItemDetails.price === 'number' ? editingItemDetails.price.toFixed(2) : editingItemDetails.price} 
+                                        onChange={handlePriceChange}
+                                        onBlur={formatPriceOnBlur}
+                                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm" 
+                                    />
+                                </div>
+                            </div>
+                            <div>
+                                <label className="text-sm font-medium text-gray-700">Quantity on Hand</label>
+                                <div className="mt-1 flex items-center space-x-2">
+                                    <input type="number" value={editingItemDetails.qty} onChange={(e) => handleItemDetailChange('qty', parseInt(e.target.value, 10))} className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm" />
+                                    <div className="flex space-x-1">
+                                        <button onClick={() => handleQtyAdjustment(-12)} className="px-2 py-1 border rounded">-12</button>
+                                        <button onClick={() => handleQtyAdjustment(-6)} className="px-2 py-1 border rounded">-6</button>
+                                        <button onClick={() => handleQtyAdjustment(-1)} className="px-2 py-1 border rounded">-1</button>
+                                    </div>
+                                    <div className="flex space-x-1">
+                                        <button onClick={() => handleQtyAdjustment(1)} className="px-2 py-1 border rounded">+1</button>
+                                        <button onClick={() => handleQtyAdjustment(6)} className="px-2 py-1 border rounded">+6</button>
+                                        <button onClick={() => handleQtyAdjustment(12)} className="px-2 py-1 border rounded">+12</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex justify-end space-x-3 mt-6">
+                            <button onClick={closeEditItemModal} className="px-5 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">Cancel</button>
+                            <button onClick={handleSaveItemDetails} className="flex items-center space-x-2 px-5 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
+                                <CheckIcon className="h-5 w-5" /><span>Save Changes</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            
             {showLabelModal && selectedOrder && (
                 <div className="fixed inset-0 bg-gray-600 bg-opacity-75 flex items-center justify-center p-4 z-50">
                     <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full p-6 relative">
@@ -507,7 +686,7 @@ const WMSInterface = ({ onLogout }: { onLogout: () => void }) => {
                             </div>
                         </div>
                         <h3 className="text-lg font-semibold text-gray-900 mb-3 border-b pb-2">Items in Order</h3>
-                        <div className="space-y-2 max-h-48 overflow-y-auto mb-6">{selectedOrder.item_list.map((item, index) => (<div key={index} className="flex justify-between items-center bg-gray-50 p-3 rounded"><div className="flex-1"><p className="text-sm font-medium text-gray-900">{item.item_name} ({item.size})</p><p className="text-xs text-gray-600">SKU: {item.sku} | Qty: {item.qty}</p></div>{item.price !== undefined && (<span className="text-sm font-medium text-gray-900">${(item.qty * item.price)}</span>)}</div>))}</div>
+                        <div className="space-y-2 max-h-48 overflow-y-auto mb-6">{selectedOrder.item_list.map((item, index) => (<div key={index} className="flex justify-between items-center bg-gray-50 p-3 rounded"><div className="flex-1"><p className="text-sm font-medium text-gray-900">{item.item_desc} ({item.item_type})</p><p className="text-xs text-gray-600">SKU: {item.sku} | Qty: {item.qty}</p></div>{item.price !== undefined && (<span className="text-sm font-medium text-gray-900">${(item.qty * item.price)}</span>)}</div>))}</div>
                         <div className="flex justify-end space-x-3">
                             <button onClick={closeOrderDetailsModal} className="px-5 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">Cancel</button>
                             <button onClick={handleUpdateTrackingDetails} className="flex items-center space-x-2 px-5 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
