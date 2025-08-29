@@ -1,6 +1,6 @@
 export type OrderStatus = 'Pending' | 'Processing' | 'Shipped' | 'Delivered' | 'Cancelled';
 
-export interface Item {
+export interface ItemOld {
   item_name: string;
   sku: string;
   size: string;
@@ -8,6 +8,17 @@ export interface Item {
   ln: string;
   qty: number;
   price?: number;
+  last_updated: Date;
+}
+
+export interface Item {
+  sku: string;
+  item_desc: string;
+  bin: string;
+  dsu: string;
+  item_type?: string;
+  qty: number;
+  price: number;
   last_updated: Date;
 }
 
